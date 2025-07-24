@@ -88,12 +88,143 @@ class FrozenQwen3:
             return outputs.last_hidden_state  # [batch_size, seq_len, 4096]
 ```
 
-### 2.2 Token-to-Latent Autoencoder
+### 2.2 Image Autoencoder CNN (pour créer des latents "image-like")
+
+**Objectif :** Créer des latents de référence "Image Réelle" pour entraîner le NoiseClassifier
+
+**Dimension latente :** 5120D (pour capturer les détails des tokens Qwen3-8B 4096D)
+
+**Options d'architecture à tester :**
+
+#### Option A : 640×8 (3 couches CNN)
+```python
+class ImageAutoencoder_640x8(nn.Module):
+    """
+    Architecture 3 couches CNN : 640×8×3 → 5120D
+    Moins de couches = reconstruction plus facile
+    """
+    def __init__(self, latent_dim: int = 5120):
+        super().__init__()
+        
+        # Encodeur CNN: [3, 640, 8] → [5120]
+        self.encoder = nn.Sequential(
+            # Conv1: 3→16 canaux, stride=2 → [16, 320, 4]
+            nn.Conv2d(3, 16, kernel_size=3, stride=2, padding=1),
+            nn.ReLU(inplace=True),
+            # Conv2: 16→40 canaux, stride=2 → [40, 160, 2]  
+            nn.Conv2d(16, 40, kernel_size=3, stride=2, padding=1),
+            nn.ReLU(inplace=True),
+            # Conv3: 40→16 canaux, stride=2 → [16, 80, 1]
+            nn.Conv2d(40, 16, kernel_size=3, stride=2, padding=1),
+            nn.ReLU(inplace=True),
+            # Flatten: 16 * 80 * 1 = 1280 → Linear → 5120
+            nn.Flatten(),
+            nn.Linear(1280, latent_dim)
+        )
+        
+        # Décodeur CNN transposé: [5120] → [3, 640, 8]
+        self.decoder = nn.Sequential(
+            nn.Linear(latent_dim, 1280),
+            nn.Unflatten(1, (16, 80, 1)),
+            # Deconv1: 16→40 canaux
+            nn.ConvTranspose2d(16, 40, kernel_size=3, stride=2, padding=1, output_padding=1),
+            nn.ReLU(inplace=True),
+            # Deconv2: 40→16 canaux  
+            nn.ConvTranspose2d(40, 16, kernel_size=3, stride=2, padding=1, output_padding=1),
+            nn.ReLU(inplace=True),
+            # Deconv3: 16→3 canaux
+            nn.ConvTranspose2d(16, 3, kernel_size=3, stride=2, padding=1, output_padding=1),
+            nn.Tanh()
+        )
+```
+
+#### Option B : 320×16 (4 couches CNN)
+```python
+class ImageAutoencoder_320x16(nn.Module):
+    """
+    Architecture 4 couches CNN : 320×16×3 → 5120D
+    Plus de couches = plus d'information spatiale mais reconstruction plus difficile
+    """
+    def __init__(self, latent_dim: int = 5120):
+        super().__init__()
+        
+        # Encodeur CNN: [3, 320, 16] → [5120]
+        self.encoder = nn.Sequential(
+            # Conv1: 3→8 canaux, stride=2 → [8, 160, 8]
+            nn.Conv2d(3, 8, kernel_size=3, stride=2, padding=1),
+            nn.ReLU(inplace=True),
+            # Conv2: 8→16 canaux, stride=2 → [16, 80, 4]
+            nn.Conv2d(8, 16, kernel_size=3, stride=2, padding=1),
+            nn.ReLU(inplace=True),
+            # Conv3: 16→32 canaux, stride=2 → [32, 40, 2]
+            nn.Conv2d(16, 32, kernel_size=3, stride=2, padding=1),
+            nn.ReLU(inplace=True),
+            # Conv4: 32→64 canaux, stride=2 → [64, 20, 1]
+            nn.Conv2d(32, 64, kernel_size=3, stride=2, padding=1),
+            nn.ReLU(inplace=True),
+            # Flatten: 64 * 20 * 1 = 1280 → Linear → 5120
+            nn.Flatten(),
+            nn.Linear(1280, latent_dim)
+        )
+        
+        # Décodeur correspondant (4 couches transposées)
+        self.decoder = nn.Sequential(
+            nn.Linear(latent_dim, 1280),
+            nn.Unflatten(1, (64, 20, 1)),
+            # 4 couches deconv symétriques
+            nn.ConvTranspose2d(64, 32, kernel_size=3, stride=2, padding=1, output_padding=1),
+            nn.ReLU(inplace=True),
+            nn.ConvTranspose2d(32, 16, kernel_size=3, stride=2, padding=1, output_padding=1),
+            nn.ReLU(inplace=True),
+            nn.ConvTranspose2d(16, 8, kernel_size=3, stride=2, padding=1, output_padding=1),
+            nn.ReLU(inplace=True),
+            nn.ConvTranspose2d(8, 3, kernel_size=3, stride=2, padding=1, output_padding=1),
+            nn.Tanh()
+        )
+```
+
+#### Option C : 1280×4×1 (2 couches CNN - dernier recours)
+```python
+class ImageAutoencoder_1280x4x1(nn.Module):
+    """
+    Architecture 2 couches CNN : 1280×4×1×3 → 5120D
+    Minimum de couches CNN = reconstruction la plus facile
+    """
+    def __init__(self, latent_dim: int = 5120):
+        super().__init__()
+        
+        # Encodeur CNN: [3, 1280, 4] → [5120]
+        self.encoder = nn.Sequential(
+            # Conv1: 3→20 canaux, stride=2 → [20, 640, 2]
+            nn.Conv2d(3, 20, kernel_size=3, stride=2, padding=1),
+            nn.ReLU(inplace=True),
+            # Conv2: 20→128 canaux, stride=2 → [128, 320, 1]
+            nn.Conv2d(20, 128, kernel_size=3, stride=2, padding=1),
+            nn.ReLU(inplace=True),
+            # Flatten: 128 * 320 * 1 = 40960 → Linear → 5120
+            nn.Flatten(),
+            nn.Linear(40960, latent_dim)
+        )
+        
+        # Décodeur CNN transposé: [5120] → [3, 1280, 4]
+        self.decoder = nn.Sequential(
+            nn.Linear(latent_dim, 40960),
+            nn.Unflatten(1, (128, 320, 1)),
+            # Deconv1: 128→20 canaux
+            nn.ConvTranspose2d(128, 20, kernel_size=3, stride=2, padding=1, output_padding=1),
+            nn.ReLU(inplace=True),
+            # Deconv2: 20→3 canaux
+            nn.ConvTranspose2d(20, 3, kernel_size=3, stride=2, padding=1, output_padding=1),
+            nn.Tanh()
+        )
+```
+
+### 2.3 Token-to-Latent Autoencoder
 
 **Architecture :**
-- Encoder : Token embeddings (32k vocab) → Latent 4096d normalisé [0,1]
-- Decoder : Latent 4096d → Token logits (32k vocab)
-- Dimension intermédiaire : 512 → 768 → 4096
+- Encoder : Token embeddings (32k vocab) → Latent 5120D normalisé [-1,1]
+- Decoder : Latent 5120D → Token logits (32k vocab)
+- Dimension intermédiaire : 512 → 1024 → 5120
 - **Normalisation** : Latents compatibles avec le noise scheduler
 
 **Implémentation :**
