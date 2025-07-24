@@ -1,0 +1,52 @@
+# Base configuration derived from README.md
+device: "cuda"
+dtype: "bfloat16"
+
+paths:
+  data_dir: "data"
+  checkpoint_dir: "checkpoints"
+
+model:
+  qwen:
+    model_path: "Qwen/Qwen3-8B"
+    quantization: "int8"
+  token_ae:
+    vocab_size: 32000
+    latent_dim: 4096
+  diffusion_head:
+    d_model: 4096
+    n_layers: 16
+    n_heads: 32
+    d_ff: 16384
+    dropout: 0.1
+  noise_classifier:
+    latent_dim: 4096
+
+generation:
+  K_max: 8
+  K_0: 8
+  T_init: 10
+  max_length: 512
+
+training:
+  batch_size: 4
+  learning_rate: 1e-4
+  weight_decay: 0.01
+  epochs: 100
+  warmup_steps: 1000
+  gradient_clip: 1.0
+  lambda_kl: 0.1
+  max_branch_depth: 2
+  top_k: 2
+
+scheduler:
+  num_timesteps: 1000
+  schedule_type: "cosine"
+  s: 0.008
+
+experiments:
+  T_init_variants: [6, 8, 10, 12]
+  n_layers_variants: [12, 16, 20]
+  K_variants: [4, 8, 16]
+  sampler_variants: ["DDIM", "DPM-Solver"]
+  batch_tokens_kv: [1, 2, 4]
